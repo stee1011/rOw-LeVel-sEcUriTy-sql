@@ -1,11 +1,99 @@
-PostgreSQL RLS Architecture: Multi-Role Data IsolationThis repository contains the SQL script (TEST.SQL) used to establish a robust Row-Level Security (RLS) architecture in PostgreSQL.The primary goal of this setup is to ensure data isolation within a shared application environment (a multi-tenant or multi-role system), preventing users from viewing or modifying data that does not belong to them, based on their assigned role.The architecture is designed around the app_users table, demonstrating four distinct levels of access control: Administrator, Standard User, LLM Service, and Data Scientist.1. Defined User and Group RolesThe following roles and access groups are created to manage distinct operational personas within the application.A. Login Roles (Connectable Users/Services)Role NamePasswordPrimary Purposealpha_adminadmin@123Administrator: Full control over all data, bypassing RLS.alpha_llmai@123LLM Service: Expected to insert and view its own data.alpha_scientistviewer@123Data Scientist: Expected to insert, update, and view their own data.B. Group Roles (NOLOGIN)Group roles simplify permission management by grouping similar users or services.Group RoleMembersPrimary Permissionuser_groupalpha_usersSELECT on all tables.alpha_devsalpha_llm, alpha_scientistINSERT on all tables.C. Permissions GrantedPermissions are defined broadly on the public schema and then restricted granularly by RLS policies on the app_users table.Role/GroupSELECTINSERTUPDATEDELETEalpha_admin✅✅✅✅user_group✅❌❌❌alpha_devs✅ (via membership)✅❌❌alpha_scientist✅ (via group)✅ (via group)✅❌2. Row-Level Security (RLS) PoliciesRLS is enabled on the app_users table, and the following policies enforce strict data filtering based on the current_user (the connecting PostgreSQL role name).RLS Policies on app_usersPolicy NameTarget Role(s)Usage (Read/View)Check (Write/Modify)Access Control Leveladmin_policyalpha_adminUSING (true)WITH CHECK (true)Bypass/Full Accessuser_policyuser_groupUSING (user_name = current_user)(None)Read Own Data (Users can only see rows where the user_name column matches their login role.)llm_policyalpha_llmUSING (user_name = current_user)WITH CHECK (user_name = current_user)Insert/Read Own Data (Prevents the LLM service from inserting data for another user.)scientist_policyalpha_scientistUSING (user_name = current_user)WITH CHECK (user_name = current_user)Update/Read Own Data (Prevents the Scientist from updating or inserting data for another user.)Key RLS ConceptsUSING Clause: Determines which rows are visible to the user when performing SELECT, UPDATE, or DELETE operations.WITH CHECK Clause: Determines if a new row being inserted (INSERT) or an updated row (UPDATE) satisfies the security policy. This is crucial for preventing users from "labeling" new data for someone else.3. Setup and TestingTo execute this RLS setup, you must first ensure you have an app_users table available and then run the script using a superuser account (e.g., postgres).Prerequisites:A PostgreSQL database instance.The app_users table must be created (though the definition is not included in the provided script, it must exist for RLS to be enabled).Execution:# Connect to your database
-psql -U postgres -d your_database
+# PostgreSQL RLS Architecture: Multi-Role Data Isolation
 
-# Run the script
-\i TEST.SQL
-After running the script, you can test the isolation by connecting as one of the defined roles:# Connect as the Data Scientist
-psql -U alpha_scientist -d your_database -W
+This repository contains the SQL script **(`TEST.SQL`)** used to establish a **robust Row-Level Security (RLS) architecture** in **PostgreSQL**.  
 
-# The query below should only return rows where user_name = 'alpha_scientist'
-SELECT * FROM app_users;
-Note: For production environments, sensitive information like passwords should be managed securely, and the use of hardcoded passwords in scripts is not recommended.
+The primary goal of this setup is to ensure **data isolation** within a shared application environment — a **multi-tenant or multi-role system** — preventing users from viewing or modifying data that does not belong to them, based on their assigned role.
+
+---
+
+## 🧩 1. Architecture Overview
+
+This design revolves around the `app_users` table and demonstrates **four distinct levels of access control**:
+
+1. **Administrator** – Full control over all data (RLS bypass)
+2. **Standard User** – Can only view their own data
+3. **LLM Service** – Inserts and views its own data
+4. **Data Scientist** – Inserts, updates, and views their own data
+
+---
+
+## 🔐 2. Defined Roles and Access Groups
+
+### A. Login Roles (Connectable Users/Services)
+
+| Role Name        | Password     | Primary Purpose |
+|------------------|--------------|-----------------|
+| `alpha_admin`     | `admin@123`   | **Administrator:** Full control over all data, bypassing RLS. |
+| `alpha_llm`       | `ai@123`      | **LLM Service:** Expected to insert and view its own data. |
+| `alpha_scientist` | `viewer@123`  | **Data Scientist:** Expected to insert, update, and view their own data. |
+
+---
+
+### B. Group Roles (NOLOGIN)
+
+Group roles simplify permission management by grouping similar users or services.
+
+| Group Role   | Members                     | Primary Permission |
+|---------------|-----------------------------|--------------------|
+| `user_group`  | `alpha_users`               | `SELECT` on all tables. |
+| `alpha_devs`  | `alpha_llm`, `alpha_scientist` | `INSERT` on all tables. |
+
+---
+
+### C. Permissions Granted
+
+Permissions are defined broadly on the `public` schema and then restricted **granularly** by **RLS policies** on the `app_users` table.
+
+| Role / Group   | SELECT | INSERT | UPDATE | DELETE | Description |
+|----------------|:------:|:------:|:------:|:------:|-------------|
+| `alpha_admin`  | ✅ | ✅ | ✅ | ✅ | Full control (bypass RLS) |
+| `user_group`   | ✅ | ❌ | ❌ | ❌ | Read-only access |
+| `alpha_devs`   | ✅ (via group) | ✅ | ❌ | ❌ | Insert access (for LLM & Scientists) |
+| `alpha_scientist` | ✅ | ✅ | ✅ | ❌ | Insert & update own data |
+
+---
+
+## 🧱 3. Row-Level Security (RLS) Policies
+
+RLS is **enabled** on the `app_users` table, and the following policies enforce strict data filtering based on the **`current_user`** (the connecting PostgreSQL role name).
+
+### RLS Policies on `app_users`
+
+| Policy Name        | Target Role(s)      | Usage (Read/View) | Check (Write/Modify) | Access Control Level |
+|--------------------|--------------------|--------------------|----------------------|----------------------|
+| `admin_policy`     | `alpha_admin`      | `USING (true)` | `WITH CHECK (true)` | Full access (bypass) |
+| `user_policy`      | `user_group`       | `USING (user_name = current_user)` | *(None)* | Read own data only |
+| `llm_policy`       | `alpha_llm`        | `USING (user_name = current_user)` | `WITH CHECK (user_name = current_user)` | Insert/Read own data |
+| `scientist_policy` | `alpha_scientist`  | `USING (user_name = current_user)` | `WITH CHECK (user_name = current_user)` | Update/Read own data |
+
+---
+
+### 🧠 Key RLS Concepts
+
+- **`USING` Clause:**  
+  Determines which rows are visible to the user during `SELECT`, `UPDATE`, or `DELETE` operations.
+
+- **`WITH CHECK` Clause:**  
+  Determines whether a new row being inserted (`INSERT`) or an updated row (`UPDATE`) satisfies the security policy.  
+  Prevents users from inserting or updating data for another role.
+
+---
+
+## ⚙️ 4. Setup and Testing
+
+### Prerequisites
+
+- A PostgreSQL instance (v12+ recommended)
+- An existing table named `app_users`
+- Superuser access (e.g., `postgres`)
+
+### Example: Creating the `app_users` Table
+
+```sql
+CREATE TABLE app_users (
+    id SERIAL PRIMARY KEY,
+    user_name TEXT NOT NULL,
+    email TEXT,
+    role TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
